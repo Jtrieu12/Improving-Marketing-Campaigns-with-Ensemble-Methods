@@ -1,0 +1,185 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import  LogisticRegression
+from sklearn import metrics , preprocessing
+from sklearn.metrics import plot_confusion_matrix , accuracy_score , classification_report
+from sklearn.model_selection import train_test_split , KFold , cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import BaggingClassifier, RandomForestClassifier, VotingClassifier , AdaBoostClassifier
+from sklearn.svm import SVC
+from sklearn.dummy import DummyClassifier
+from sklearn.preprocessing import StandardScaler
+from google.colab import files
+import xgboost as xgb 
+
+
+
+#EDA
+
+data = pd.read_csv('/content/MarketingDataset.csv',sep=";")
+pd.set_option('display.max_columns',None)
+
+df = pd.DataFrame(data)
+
+
+# We see that there's no missing data
+print(df.info())
+#Our dataset has  entries 
+print(df.isnull().any())
+
+#our target variable is "y" column
+#and we have 16 feature variables 
+#see that there is a variety of data types, so we need to convert them to dummy variables 
+
+#drop day from the columns as the specific date in of itself isn't as telling. 
+df = df.drop(columns=["day"])
+
+#need dummy variables for job, marital, education, default, housing, loan, contact, month, poutcome 
+X = df.iloc[:,:-1]
+y = df.iloc[:,-1]
+#print(y.head())
+
+X = pd.get_dummies(X,columns=["job","marital","education",'default','housing','loan','contact','month','poutcome'])
+#print(X.head())
+
+#normalize data 
+b = X.iloc[:,:6].values
+norm_columns = ['age','balance','duration','campaign','pdays','previous']
+scaler = preprocessing.StandardScaler()
+b_transformed = scaler.fit_transform(b)
+c = pd.DataFrame(b_transformed, columns=norm_columns)
+
+#drop the unnormalized data 
+X = X.drop(columns=norm_columns)
+X = X.join(c)
+print(X.head())
+
+
+sns.countplot(x=y, data=data)
+plt.title("Customer Responses")
+plt.savefig("ITP_Final_Project_Graph1.png")
+
+
+
+sns.pairplot(df)
+plt.savefig("ITP_Final_Project_Graph2.png")
+
+print(df.describe())
+
+
+#Splitting the Data into the Feature variables and Target Variable 
+
+print(X.shape)
+print(y.shape)
+X_train, X_test , y_train , y_test = train_test_split(X,y,test_size = 0.3, stratify=y, random_state = 42)
+
+#dummy classifier for baseline
+
+dc = DummyClassifier(strategy='stratified')
+dc.fit(X_train,y_train)
+baseline_acc = dc.score(X_test,y_test)
+print(baseline_acc)
+
+#bagging classifier 
+
+bg_clas = BaggingClassifier(random_state=42)
+bg_clas.fit(X_train,y_train)
+bg_pred = bg_clas.predict(X_test)
+print(classification_report(y_test,bg_pred))
+
+#random Forest
+rf = RandomForestClassifier(n_estimators=5,max_features=10,random_state=42)
+rf.fit(X_train,y_train)
+predict_rf = rf.predict(X_test)
+print(classification_report(y_test,predict_rf))
+
+#XGBoost: 
+xg_clas = xgb.XGBClassifier(objective ='binary:logistic', colsample_bytree = 0.4, learning_rate = 0.2, max_depth = 10, alpha = 10, n_estimators = 10)
+xg_clas.fit(X_train,y_train)
+xg_predict = xg_clas.predict(X_test)
+print(classification_report(y_test,xg_predict))
+
+
+#adaboost classifier 
+base_clas = DecisionTreeClassifier(max_depth=6)
+ada_boost = AdaBoostClassifier(base_clas,n_estimators=200,random_state=42,learning_rate=0.3)
+ada_boost.fit(X_train,y_train)
+predict_ada = ada_boost.predict(X_test)
+print(classification_report(y_test,predict_ada))
+
+#voting classifier 
+
+voting_random_forest = RandomForestClassifier(n_estimators=200)
+voting_support_classify = SVC(probability=True)
+voting_logistic_reg = LogisticRegression()
+voting_dt_classifier = DecisionTreeClassifier(max_depth=6)
+voting_xgb = xgb.XGBClassifier(objective ='reg:linear', colsample_bytree = 0.4, learning_rate = 0.1, max_depth = 10, alpha = 10, n_estimators = 10)
+
+#Voting Classifier
+vc = VotingClassifier(estimators=[('rf',voting_random_forest),
+                                 ('svm',voting_support_classify),
+                                 ('log',voting_logistic_reg),
+                                 ('dt',voting_dt_classifier),
+                                 ('xgb',voting_xgb)],
+                                 voting='soft')
+
+vc.fit(X_train,y_train)
+vc_pred = vc.predict(X_test)
+
+print(classification_report(y_test,vc_pred))
+
+
+#xgboost Cross Validation 
+
+
+
+blah = pd.DataFrame(y.values,columns=['Testing'])
+blah['num'] = np.where(blah['Testing']=='no',0,1)
+blah = blah.drop(columns=['Testing'])
+data_matrix = xgb.DMatrix(data= X,label=blah)
+params = {"objective":"binary:logistic",'colsample_bytree': 0.5,'learning_rate': 0.5,
+                'max_depth': 10, 'alpha': 10}
+cv_results = xgb.cv(dtrain=data_matrix, params=params, nfold=10,
+                    num_boost_round=50,
+                    early_stopping_rounds=20,
+                    metrics='error', 
+                    as_pandas=True, 
+                    seed=123)
+l = 1-(cv_results["test-error-mean"]).tail(1)
+print(l)
+#comparing it to baseline error
+print(baseline_acc)
+
+
+z = ["XGBoost","Baseline"]
+z1 = [l,baseline_acc]
+plt.bar(z,z1,width=0.5)
+plt.title("Accuracy of Models")
+plt.savefig("ITP_Final_Project_Graph3.png")
+
+
+
+#graphs of feature importances
+
+
+xgbfi = xg_clas.feature_importances_
+xgf = X_train.columns
+f2 = pd.DataFrame({'features': xgf,'importance': xgbfi})
+f2 = f2.sort_values(by='importance',ascending = False)
+print(f2.head())
+
+top5 = f2.head()
+
+
+
+f = plt.figure()
+f.set_figwidth(20)
+f.set_figheight(20)
+
+plt.bar(f2['features'],f2['importance'])
+plt.title("Feature Importance")
+plt.savefig("ITP_Final_Project_Graph5.png")
